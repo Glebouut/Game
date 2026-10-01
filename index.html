@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Пугало против ворон</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1d2b1f; overflow: hidden; touch-action: none; }
+  canvas { display: block; margin: 0 auto; }
+  body { font-family: system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const W = 960, H = 600, GROUND = 500;
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  let scale = 1;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    scale = Math.min(innerWidth / W, innerHeight / H);
+    cv.style.width = W * scale + 'px';
+    cv.style.height = H * scale + 'px';
+    cv.width = W * scale * dpr;
+    cv.height = H * scale * dpr;
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  const dummy = new Image();
+  dummy.src = 'Dummy.png';
+
+  // ---------- state ----------
+  const BEST_KEY = 'scarecrow-best';
+  let best = 0;
+  try { best = +localStorage.getItem(BEST_KEY) || 0; } catch (e) {}
+
+  let state, player, crows, corn, particles, popups, waves;
+
+  function reset() {
+    state = { mode: 'title', time: 0, score: 0, scared: 0, spawnT: 0, level: 1, shake: 0 };
+    player = { x: W / 2, vx: 0, boo: 0, booCd: 0, flap: 0 };
+    crows = []; particles = []; popups = []; waves = [];
+    corn = [];
+    const n = 9;
+    for (let i = 0; i < n; i++) corn.push({ x: 70 + i * (W - 140) / (n - 1), hp: 1, eaten: false, sway: Math.random() * 6 });
+  }
+  reset();
+
+  // ---------- input ----------
+  const keys = {};
+  let pointerX = null;
+  addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (['Space', 'ArrowLeft', 'ArrowRight', 'ArrowUp'].includes(e.code)) e.preventDefault();
+    if (e.code === 'Space' || e.code === 'Enter') action();
+  });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+
+  function toGame(e) {
+    const r = cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
+  }
+  cv.addEventListener('pointerdown', e => {
+    const p = toGame(e);
+    if (state.mode !== 'play') { action(); return; }
+    // tap on the upper part = shout, lower part = walk there
+    if (p.y < GROUND - 160) action(); else pointerX = p.x;
+  });
+  cv.addEventListener('pointermove', e => { if (e.buttons && state.mode === 'play') { const p = toGame(e); if (p.y >= GROUND - 160) pointerX = p.x; } });
+  addEventListener('pointerup', () => { pointerX = null; });
+
+  function action() {
+    if (state.mode === 'title' || state.mode === 'over') { reset(); state.mode = 'play'; return; }
+    if (state.mode === 'play' && player.booCd <= 0) boo();
+  }
+
+  // ---------- sound ----------
+  let ac = null;
+  function beep(freq, dur, type = 'square', vol = 0.08, slide = 0) {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.value = freq;
+      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), ac.currentTime + dur);
+      g.gain.value = vol;
+      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+      o.connect(g).connect(ac.destination);
+      o.start(); o.stop(ac.currentTime + dur);
+    } catch (e) {}
+  }
+
+  // ---------- gameplay ----------
+  const BOO_RADIUS = 230, AURA = 70;
+
+  function boo() {
+    player.boo = 0.5; player.booCd = 2.2;
+    waves.push({ x: player.x, y: GROUND - 110, r: 20, life: 0.5 });
+    state.shake = 8;
+    beep(140, 0.35, 'sawtooth', 0.12, -80);
+    let combo = 0;
+    for (const c of crows) {
+      if (c.state === 'flee') continue;
+      const d = Math.hypot(c.x - player.x, c.y - (GROUND - 110));
+      if (d < BOO_RADIUS) { scare(c, true); combo++; }
+    }
+    if (combo >= 3) {
+      const bonus = combo * 5;
+      state.score += bonus;
+      popups.push({ x: player.x, y: GROUND - 230, text: `КОМБО x${combo}! +${bonus}`, life: 1.4, color: '#ffd84a' });
+    }
+  }
+
+  function scare(c, byBoo) {
+    if (c.target) c.target.busy = false;
+    c.state = 'flee';
+    c.vx = (c.x < player.x ? -1 : 1) * (260 + Math.random() * 120);
+    c.vy = -260 - Math.random() * 120;
+    const pts = c.gold ? 25 : 5;
+    state.score += pts; state.scared++;
+    popups.push({ x: c.x, y: c.y - 20, text: '+' + pts, life: 0.9, color: c.gold ? '#ffd84a' : '#fff' });
+    for (let i = 0; i < 6; i++) particles.push({
+      x: c.x, y: c.y, vx: (Math.random() - 0.5) * 200, vy: (Math.random() - 0.8) * 200,
+      life: 1 + Math.random(), rot: Math.random() * 6, color: c.gold ? '#e2b33a' : '#222'
+    });
+    if (!byBoo) beep(700, 0.08, 'square', 0.05, 300);
+  }
+
+  function spawnCrow() {
+    const alive = corn.filter(k => !k.eaten && !k.busy);
+    if (!alive.length) return;
+    const target = alive[Math.floor(Math.random() * alive.length)];
+    target.busy = true;
+    const fromLeft = Math.random() < 0.5;
+    const gold = Math.random() < 0.08;
+    const speed = (110 + state.level * 14 + Math.random() * 40) * (gold ? 1.4 : 1);
+    crows.push({
+      x: fromLeft ? -40 : W + 40, y: 60 + Math.random() * 160,
+      vx: 0, vy: 0, speed, target, state: 'fly', eat: 0, gold,
+      wob: Math.random() * 6, flap: Math.random() * 6
+    });
+  }
+
+  function update(dt) {
+    state.time += dt;
+    for (const k of corn) k.sway += dt;
+
+    if (state.mode !== 'play') { updateFx(dt); return; }
+
+    state.level = 1 + Math.floor(state.time / 20);
+
+    // player movement
+    let dir = 0;
+    if (keys.ArrowLeft || keys.KeyA) dir -= 1;
+    if (keys.ArrowRight || keys.KeyD) dir += 1;
+    if (pointerX !== null) {
+      const d = pointerX - player.x;
+      if (Math.abs(d) > 8) dir = Math.sign(d);
+    }
+    const MAX = 380;
+    player.vx += (dir * MAX - player.vx) * Math.min(1, dt * 10);
+    player.x = Math.max(50, Math.min(W - 50, player.x + player.vx * dt));
+    player.flap += dt * (Math.abs(player.vx) / 40 + 2);
+    player.boo = Math.max(0, player.boo - dt);
+    player.booCd = Math.max(0, player.booCd - dt);
+
+    // spawn
+    state.spawnT -= dt;
+    if (state.spawnT <= 0) {
+      spawnCrow();
+      if (state.level >= 4 && Math.random() < 0.3) spawnCrow();
+      state.spawnT = Math.max(0.45, 2.0 - state.level * 0.18) * (0.6 + Math.random() * 0.8);
+    }
+
+    // crows
+    for (const c of crows) {
+      c.flap += dt * (c.state === 'eat' ? 3 : 14);
+      if (c.state === 'fly') {
+        const tx = c.target.x, ty = GROUND - 95;
+        const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy);
+        c.wob += dt * 3;
+        if (d < 6) { c.state = 'eat'; c.x = tx; c.y = ty; }
+        else {
+          c.x += dx / d * c.speed * dt;
+          c.y += dy / d * c.speed * dt + Math.sin(c.wob) * 20 * dt;
+        }
+      } else if (c.state === 'eat') {
+        c.eat += dt;
+        c.target.hp = Math.max(0, c.target.hp - dt / 3.5);
+        if (Math.random() < dt * 6) particles.push({ x: c.x, y: c.y + 10, vx: (Math.random() - .5) * 80, vy: -60, life: .6, rot: 0, color: '#f4d03f', kernel: true });
+        if (c.target.hp <= 0) {
+          c.target.eaten = true; c.target.busy = false;
+          c.state = 'flee'; c.vx = (Math.random() < .5 ? -1 : 1) * 200; c.vy = -150; c.fed = true;
+          state.shake = 5;
+          beep(220, 0.25, 'triangle', 0.1, -120);
+        }
+      } else {
+        c.vy -= 100 * dt;
+        c.x += c.vx * dt; c.y += c.vy * dt;
+      }
+      // passive aura: crow touching the scarecrow gets scared
+      if (c.state !== 'flee') {
+        const d = Math.hypot(c.x - player.x, c.y - (GROUND - 110));
+        if (d < AURA) scare(c, false);
+      }
+    }
+    crows = crows.filter(c => c.x > -120 && c.x < W + 120 && c.y > -120);
+
+    if (corn.every(k => k.eaten)) {
+      state.mode = 'over';
+      state.score = Math.floor(state.score);
+      if (state.score > best) { best = state.score; try { localStorage.setItem(BEST_KEY, best); } catch (e) {} }
+      beep(300, 0.6, 'sawtooth', 0.1, -250);
+    }
+    updateFx(dt);
+  }
+
+  function updateFx(dt) {
+    for (const p of particles) { p.vy += 400 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += dt * 5; p.life -= dt; }
+    particles = particles.filter(p => p.life > 0 && p.y < GROUND + 20);
+    for (const p of popups) { p.y -= 40 * dt; p.life -= dt; }
+    popups = popups.filter(p => p.life > 0);
+    for (const w of waves) { w.r += 900 * dt; w.life -= dt; }
+    waves = waves.filter(w => w.life > 0);
+    state.shake = Math.max(0, state.shake - dt * 30);
+  }
+
+  // ---------- drawing ----------
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, 0, 0, GROUND);
+    g.addColorStop(0, '#f6a35c'); g.addColorStop(0.6, '#f9d29d'); g.addColorStop(1, '#fbe8c4');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, GROUND);
+    // sun
+    ctx.fillStyle = 'rgba(255,240,200,0.9)';
+    ctx.beginPath(); ctx.arc(780, 140, 55, 0, 7); ctx.fill();
+    // hills
+    ctx.fillStyle = '#c98b54';
+    ctx.beginPath(); ctx.moveTo(0, GROUND - 60);
+    for (let x = 0; x <= W; x += 40) ctx.lineTo(x, GROUND - 70 - Math.sin(x / 140) * 30);
+    ctx.lineTo(W, GROUND); ctx.lineTo(0, GROUND); ctx.fill();
+    // ground
+    ctx.fillStyle = '#6b4a2b'; ctx.fillRect(0, GROUND, W, H - GROUND);
+    ctx.fillStyle = '#5a3d22';
+    for (let x = 0; x < W; x += 48) ctx.fillRect(x, GROUND + 18, 30, 6);
+    ctx.fillStyle = '#7c9a3a'; ctx.fillRect(0, GROUND, W, 8);
+  }
+
+  function drawCorn(k) {
+    const x = k.x, base = GROUND;
+    const sway = Math.sin(k.sway * 1.5) * 3;
+    if (k.eaten) {
+      ctx.strokeStyle = '#8a7a3a'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(x, base); ctx.lineTo(x + 2, base - 35); ctx.stroke();
+      return;
+    }
+    ctx.strokeStyle = '#4f8a2b'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(x, base); ctx.quadraticCurveTo(x, base - 60, x + sway, base - 120); ctx.stroke();
+    ctx.fillStyle = '#5fa33a';
+    for (const s of [-1, 1]) {
+      ctx.beginPath(); ctx.moveTo(x, base - 50);
+      ctx.quadraticCurveTo(x + s * 40, base - 70, x + s * 45 + sway, base - 40);
+      ctx.quadraticCurveTo(x + s * 25, base - 60, x, base - 45); ctx.fill();
+    }
+    // cob, shrinks as it gets eaten
+    const h = 40 * k.hp + 6;
+    ctx.fillStyle = '#f4c430';
+    ctx.beginPath(); ctx.ellipse(x + 8 + sway * .6, base - 85, 8, h / 2, 0.15, 0, 7); ctx.fill();
+    ctx.fillStyle = '#7fb24a';
+    ctx.beginPath(); ctx.moveTo(x + 2, base - 65); ctx.quadraticCurveTo(x + 20, base - 80, x + 14 + sway, base - 85 - h / 2); ctx.lineTo(x + 6, base - 70); ctx.fill();
+  }
+
+  function drawCrow(c) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    const face = c.state === 'flee' ? Math.sign(c.vx) || 1 : (c.state === 'eat' ? (c.x < W / 2 ? 1 : -1) : Math.sign(c.target.x - c.x) || 1);
+    ctx.scale(face, 1);
+    const body = c.gold ? '#d9a521' : '#1b1b22';
+    const wing = c.gold ? '#b8851a' : '#2c2c38';
+    // tail
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-30, -6); ctx.lineTo(-30, 8); ctx.fill();
+    // body
+    ctx.beginPath(); ctx.ellipse(0, 0, 18, 12, 0, 0, 7); ctx.fill();
+    // head
+    ctx.beginPath(); ctx.arc(16, -8, 9, 0, 7); ctx.fill();
+    // beak
+    ctx.fillStyle = '#e8a33a';
+    ctx.beginPath(); ctx.moveTo(23, -10); ctx.lineTo(34, -6); ctx.lineTo(23, -4); ctx.fill();
+    // eye
+    ctx.fillStyle = c.state === 'flee' ? '#fff' : '#f2f2f2';
+    ctx.beginPath(); ctx.arc(18, -10, c.state === 'flee' ? 3.5 : 2.2, 0, 7); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(18.5, -10, 1.2, 0, 7); ctx.fill();
+    // wing
+    const a = c.state === 'eat' ? 0.2 : Math.sin(c.flap) * 0.9;
+    ctx.fillStyle = wing;
+    ctx.save(); ctx.rotate(-a);
+    ctx.beginPath(); ctx.moveTo(-6, -2); ctx.quadraticCurveTo(-4, -30, -22, -28); ctx.quadraticCurveTo(-12, -10, -6, -2); ctx.fill();
+    ctx.restore();
+    if (c.state === 'flee' && !c.fed) {
+      ctx.scale(face, 1);
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('!!', 0, -26);
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    const x = player.x, y = GROUND;
+    const s = 0.55 + player.boo * 0.25;
+    const w = 412 * s * 0.6, h = 419 * s * 0.6;
+    const tilt = player.vx / 3000 + (player.boo ? Math.sin(state.time * 60) * 0.05 : 0);
+    const bob = Math.abs(Math.sin(player.flap)) * 4;
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(x, y + 4, 40, 8, 0, 0, 7); ctx.fill();
+    ctx.save();
+    ctx.translate(x, y - bob);
+    ctx.rotate(tilt);
+    if (dummy.complete && dummy.naturalWidth) ctx.drawImage(dummy, -w / 2, -h, w, h);
+    else { ctx.fillStyle = '#c9d6ea'; ctx.fillRect(-30, -h * .7, 60, 60); }
+    ctx.restore();
+    if (player.boo > 0) {
+      ctx.save();
+      ctx.font = 'bold 44px system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = '#7a2a12'; ctx.lineWidth = 6;
+      ctx.strokeText('БУ!', x, y - h - 20); ctx.fillText('БУ!', x, y - h - 20);
+      ctx.restore();
+    }
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(12, 12, 250, 70);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('Очки: ' + Math.floor(state.score), 24, 40);
+    ctx.font = '16px system-ui';
+    ctx.fillText(`Волна ${state.level}   Рекорд: ${best}`, 24, 66);
+    // corn left
+    const left = corn.filter(k => !k.eaten).length;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(W - 200, 12, 188, 40);
+    ctx.fillStyle = '#ffd84a'; ctx.font = 'bold 20px system-ui';
+    ctx.fillText('🌽 ' + left + ' / ' + corn.length, W - 24, 40);
+    // boo cooldown bar
+    const bx = W / 2 - 90, by = H - 50;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(bx, by, 180, 22);
+    const ready = player.booCd <= 0;
+    ctx.fillStyle = ready ? '#ffd84a' : '#a77';
+    ctx.fillRect(bx + 3, by + 3, 174 * (1 - player.booCd / 2.2), 16);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(ready ? 'БУ! готово (пробел)' : 'перезарядка...', W / 2, by + 16);
+  }
+
+  function centerText(lines) {
+    ctx.fillStyle = 'rgba(20,15,10,0.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    let y = H / 2 - (lines.length - 1) * 22;
+    for (const [text, size, color] of lines) {
+      ctx.font = `bold ${size}px system-ui`; ctx.fillStyle = color || '#fff';
+      ctx.fillText(text, W / 2, y); y += size + 16;
+    }
+  }
+
+  function draw() {
+    ctx.save();
+    if (state.shake) ctx.translate((Math.random() - .5) * state.shake, (Math.random() - .5) * state.shake);
+    drawBackground();
+    for (const k of corn) drawCorn(k);
+    for (const w of waves) {
+      ctx.strokeStyle = `rgba(255,255,255,${w.life * 1.6})`; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(w.x, w.y, Math.min(w.r, BOO_RADIUS), 0, 7); ctx.stroke();
+    }
+    drawPlayer();
+    for (const c of crows) drawCrow(c);
+    for (const p of particles) {
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      if (p.kernel) { ctx.beginPath(); ctx.arc(0, 0, 3, 0, 7); ctx.fill(); }
+      else { ctx.beginPath(); ctx.ellipse(0, 0, 7, 2.5, 0, 0, 7); ctx.fill(); }
+      ctx.restore();
+    }
+    for (const p of popups) {
+      ctx.globalAlpha = Math.min(1, p.life * 2);
+      ctx.fillStyle = p.color; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+
+    if (state.mode === 'play') drawHUD();
+    else if (state.mode === 'title') centerText([
+      ['ПУГАЛО ПРОТИВ ВОРОН', 46, '#ffd84a'],
+      ['Защити кукурузу от прожорливых ворон!', 20],
+      ['← → / A D или касание снизу — ходить', 18, '#ddd'],
+      ['Пробел или касание сверху — крикнуть «БУ!»', 18, '#ddd'],
+      ['Золотые вороны дают 25 очков', 18, '#e2b33a'],
+      ['Нажми пробел / коснись, чтобы начать', 22, '#fff'],
+    ]);
+    else centerText([
+      ['ВСЯ КУКУРУЗА СЪЕДЕНА!', 42, '#ff8a5c'],
+      ['Очки: ' + state.score + '   Рекорд: ' + best, 26],
+      [`Прогнано ворон: ${state.scared}   Продержался: ${Math.floor(state.time)} c`, 20, '#ddd'],
+      ['Пробел / касание — ещё раз', 22, '#ffd84a'],
+    ]);
+  }
+
+  let last = performance.now();
+  function loop(t) {
+    const dt = Math.min(0.05, (t - last) / 1000);
+    last = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // expose for debugging/tests
+  window.__game = { get state() { return state; }, get crows() { return crows; }, get corn() { return corn; } };
+})();
+</script>
+</body>
+</html>
