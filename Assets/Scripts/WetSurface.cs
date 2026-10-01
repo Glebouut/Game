@@ -45,11 +45,19 @@ public class WetSurface : MonoBehaviour
     {
         get
         {
-            if (corners != null && corners.Length >= 2)
+            if (corners == null || corners.Length < 2 || WaterFX.I == null)
             {
-                return WaterFX.I != null;
+                return false;
             }
-            return false;
+            // Пустой слот в массиве углов — иначе NullReferenceException каждый кадр.
+            foreach (Transform corner in corners)
+            {
+                if (corner == null)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -126,7 +134,7 @@ public class WetSurface : MonoBehaviour
                     to = vector2;
                 }
             }
-            float num6 = num3 / flowSpeed * Random.Range(0.8f, 1.3f);
+            float num6 = num3 / Mathf.Max(flowSpeed, 0.0001f) * Random.Range(0.8f, 1.3f);
             int num7 = water[num].Length;
             int seg = Mathf.Min(num7 - 1, (int)(num2 * (float)num7));
             flows.Add(new Flow

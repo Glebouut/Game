@@ -50,18 +50,39 @@ public class GrassField : MonoBehaviour
         dirty = true;
     }
 
+    private void OnDisable()
+    {
+        DestroyMesh();
+    }
+
     private void OnValidate()
     {
         dirty = true;
     }
 
+    private void DestroyMesh()
+    {
+        if (mesh == null)
+        {
+            return;
+        }
+        if (Application.isPlaying)
+        {
+            UnityEngine.Object.Destroy(mesh);
+        }
+        else
+        {
+            UnityEngine.Object.DestroyImmediate(mesh);
+        }
+        mesh = null;
+    }
+
     private void Build()
     {
         dirty = false;
-        if (mesh == null)
-        {
-            mesh = BuildClump(clumpWidth, clumpHeight);
-        }
+        // Размеры пучка могли поменяться в инспекторе — пересобираем меш.
+        DestroyMesh();
+        mesh = BuildClump(clumpWidth, clumpHeight);
         System.Random random = new System.Random(seed);
         List<Matrix4x4> list = new List<Matrix4x4>(count);
         int num = 0;
@@ -167,6 +188,7 @@ public class GrassField : MonoBehaviour
         }
         Mesh obj = new Mesh();
         obj.name = "GrassClump";
+        obj.hideFlags = HideFlags.DontSave;
         obj.SetVertices(list);
         obj.SetUVs(0, list2);
         obj.SetNormals(list3);

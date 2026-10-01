@@ -47,6 +47,26 @@ public class TreeField : MonoBehaviour
         dirty = true;
     }
 
+    private void OnDisable()
+    {
+        for (int i = 0; i < variants.Length; i++)
+        {
+            if (variants[i] == null)
+            {
+                continue;
+            }
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(variants[i]);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(variants[i]);
+            }
+            variants[i] = null;
+        }
+    }
+
     private void OnValidate()
     {
         dirty = true;
@@ -196,6 +216,7 @@ public class TreeField : MonoBehaviour
         Leader(list, list2, list3, list4, list5, Vector3.forward);
         Mesh mesh = new Mesh();
         mesh.name = "Spruce";
+        mesh.hideFlags = HideFlags.DontSave;
         mesh.SetVertices(list);
         mesh.SetNormals(list2);
         mesh.SetUVs(0, list3);

@@ -233,26 +233,62 @@ public class VarleyBlockout : MonoBehaviour
         Tex(glassDark, "varley_glass_dark", normal: false);
         Tex(glassLit, "varley_glass_lit", normal: false, emissive: true);
         uvRules.Clear();
-        uvRules[concrete] = new UvRule
+        SetUvRule(concrete, new UvRule
         {
             u = 6f,
             v = 12f,
             worldHeight = true
-        };
-        uvRules[plinth] = new UvRule
+        });
+        SetUvRule(plinth, new UvRule
         {
             u = 2f,
             v = 2f
-        };
-        uvRules[metal] = new UvRule
+        });
+        SetUvRule(metal, new UvRule
         {
             u = 2f,
             v = 2f
-        };
+        });
     }
 
+    // Без материала (например, вне редактора) Dictionary бросил бы ArgumentNullException на null-ключе.
+    private void SetUvRule(Material m, UvRule rule)
+    {
+        if (m != null)
+        {
+            uvRules[m] = rule;
+        }
+    }
+
+    // Тела Tex() и Mat() в релизной сборке пустые: это был код только для редактора
+    // (AssetDatabase), Unity вырезает его из билда. Ниже — восстановленная версия.
     private void Tex(Material m, string name, bool normal, bool emissive = false)
     {
+#if UNITY_EDITOR
+        if (m == null)
+        {
+            return;
+        }
+        Texture2D texture = FindAsset<Texture2D>(name);
+        if (texture != null)
+        {
+            m.SetTexture("_BaseMap", texture);
+            if (emissive)
+            {
+                m.SetTexture("_EmissionMap", texture);
+            }
+        }
+        if (normal)
+        {
+            Texture2D normalMap = FindAsset<Texture2D>(name + "_normal");
+            if (normalMap != null)
+            {
+                m.SetTexture("_BumpMap", normalMap);
+                m.EnableKeyword("_NORMALMAP");
+            }
+        }
+        UnityEditor.EditorUtility.SetDirty(m);
+#endif
     }
 
     private void FitUv(GameObject g, Material m)
@@ -301,8 +337,57 @@ public class VarleyBlockout : MonoBehaviour
         component.sharedMesh = mesh;
     }
 
+    // Берёт существующий материал с таким именем (его настройки не трогает),
+    // иначе создаёт новый URP/Lit в Assets/Materials.
     private Material Mat(string name, Color c, float smooth, Color? emit = null)
     {
+#if UNITY_EDITOR
+        Material existing = FindAsset<Material>(name);
+        if (existing != null)
+        {
+            return existing;
+        }
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null)
+        {
+            Debug.LogWarning("VarleyBlockout: нет шейдера URP/Lit.");
+            return null;
+        }
+        Material material = new Material(shader);
+        material.name = name;
+        material.SetColor("_BaseColor", c);
+        material.SetFloat("_Smoothness", smooth);
+        if (emit.HasValue)
+        {
+            material.SetColor("_EmissionColor", emit.Value);
+            material.EnableKeyword("_EMISSION");
+            material.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+        }
+        if (!UnityEditor.AssetDatabase.IsValidFolder("Assets/Materials"))
+        {
+            UnityEditor.AssetDatabase.CreateFolder("Assets", "Materials");
+        }
+        UnityEditor.AssetDatabase.CreateAsset(material, "Assets/Materials/" + name + ".mat");
+        return material;
+#else
+        return null;
+#endif
+    }
+
+#if UNITY_EDITOR
+    // Ищет ассет по точному имени: FindAssets ищет по подстроке, а varley_concrete
+    // не должен совпасть с varley_concrete_dark.
+    private static T FindAsset<T>(string name) where T : Object
+    {
+        foreach (string guid in UnityEditor.AssetDatabase.FindAssets(name + " t:" + typeof(T).Name))
+        {
+            T asset = UnityEditor.AssetDatabase.LoadAssetAtPath<T>(UnityEditor.AssetDatabase.GUIDToAssetPath(guid));
+            if (asset != null && asset.name == name)
+            {
+                return asset;
+            }
+        }
         return null;
     }
+#endif
 }
